@@ -36,7 +36,8 @@ tình huống mới.
 - **Gamification**: streak, xu, hạng/badge, phạt ngày bỏ lỡ, nhắc giờ
   luyện hằng ngày (cài được giờ + số phiên/ngày).
 - **Reset dữ liệu**: nút "Xóa lịch sử luyện tập" trong Cài đặt — xóa
-  sessions/lỗi/từ vựng/pitch/xu, giữ API key + hồ sơ + cài đặt.
+  sessions/lỗi/từ vựng/pitch/xu + meta gamification (best streak, hạng,
+  mốc phạt), giữ API key + hồ sơ + cài đặt + tình huống tự tạo.
 - **Pitch hàng tuần**: ghi 1 bài pitch/tuần để tự đo tiến bộ.
 - **Onboarding**: tên + lĩnh vực + mảng nhỏ → AI vào vai đúng nghề.
 
@@ -46,7 +47,9 @@ tình huống mới.
   (`src/services/geminiLive.ts`) — mic PCM16 16kHz lên, PCM16 24kHz về.
   `activityHandling: 'NO_INTERRUPTION'` + `proactivity.proactiveAudio:
   false` + gate mic phía client trong lúc AI nói → tiếng ồn/echo không
-  chặt câu của model và model không tự nói tiếp khi im lặng.
+  chặt câu của model và model không tự nói tiếp khi im lặng. Socket rớt
+  giữa chừng được resume bằng `sessionResumption` handle (tối đa 3 lần)
+  — phiên và bản ghi không mất khi mạng chập chờn.
 - **Mic + ghi file**: `@siteed/audio-studio` — vừa stream PCM vừa ghi
   AAC nén ra file (`output.compressed`). Patch pnpm
   (`patches/@siteed__audio-studio.patch`) đổi `AudioSource.MIC` →
@@ -56,7 +59,11 @@ tình huống mới.
 - **Chấm bài + sinh scenario**: REST `generateContent`, fallback theo
   thứ tự `gemini-3.1-flash-lite` → `gemini-3.5-flash-lite` →
   `gemini-2.5-flash-lite` (quota free tier tính theo từng model).
-- **Live model**: `gemini-2.5-flash-native-audio-preview-12-2025`.
+  Chấm bài có timeout 30s/model; output AI được validate trước khi ghi
+  DB — response xấu không thể kẹt màn review.
+- **Live model**: `gemini-2.5-flash-native-audio-preview-12-2025`,
+  fallback `gemini-2.5-flash-preview-native-audio-dialog` nếu model đầu
+  bị từ chối setup.
 - **Data**: `expo-sqlite` — sessions (kèm `audio_uri`), errors, vocab,
   pitches, custom_scenarios, meta.
 - **API key**: nhập trong Cài đặt, lưu Expo SecureStore, không backend.
@@ -107,11 +114,25 @@ keystore + signing config theo bước trên.
 - `endCall` persist transcript + session **trước** khi teardown audio
   (`ctx.close()` có thể treo) và teardown bọc timeout — nút Kết thúc
   không bao giờ kẹt.
-- Session không transcript (connect rớt/remount) tự xóa khỏi history.
+- Session không transcript (connect rớt/remount) tự xóa khỏi history;
+  file `.m4a` mồ côi (không còn session row trỏ tới) cũng được dọn lúc
+  khởi động app.
+- +10 xu chỉ tính khi phiên live ≥30s **và** transcript có ít nhất một
+  lượt nói thật của user — thời gian đồng hồ chạy từ lúc `onReady`,
+  không tính từ lúc mở màn hình → không farm được bằng phiên im lặng.
+- Dữ liệu AI chấm bài là untrusted input: error thiếu `said`/`correct`
+  và vocab thiếu `term` bị bỏ qua thay vì ném NOT NULL → kẹt "Đang chấm
+  bài..."; toàn bộ persist bọc try/catch, `setResult` luôn chạy.
+- `sc.interrupted` phải return ngay — `modelTurn.parts` cùng frame là
+  đuôi của turn đã chết, enqueue sau `player.flush()` sẽ phát lại tiếng
+  cũ. Và `connectTimer` 20s phải clear khi socket đóng, nếu không nó giết
+  lần retry kế tiếp.
 - Enum VAD đúng là `END_SENSITIVITY_LOW` (không phải
   `END_OF_SPEECH_SENSITIVITY_LOW`) — sai enum bị server từ chối setup.
 - `router.dismissTo` tới cùng route chỉ pop chứ không mount màn mới —
   dùng `router.push` khi cần instance mới (nút "Luyện lại theo dàn ý").
 - Đã test trên Pixel 6a thật: call 2 chiều (cả 2 chế độ), ghi + nghe
   lại, chấm bài, dàn ý + luyện lại, tạo scenario, pitch, streak/xu,
-  nhắc giờ, reset dữ liệu.
+  nhắc giờ, reset dữ liệu. Đợt fix audit sau đó mới qua typecheck —
+  cần re-test trên máy thật: reconnect giữa call, phiên im lặng không
+  +xu, sinh scenario khi mất mạng báo lỗi rõ.
