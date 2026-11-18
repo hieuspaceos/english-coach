@@ -238,6 +238,9 @@ export default function SessionScreen() {
 
     const session = new GeminiLiveSession({
       onReady: async () => {
+        // A resumed socket fires onReady again — the recorder and the DB
+        // row already exist, so just let the call continue.
+        if (statusRef.current === 'live') return;
         try {
           // iOS: play AI voice + record mic simultaneously, ignore silent switch
           await setAudioModeAsync({

@@ -14,8 +14,12 @@
 const WS_URL =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
-/** Native-audio dialog model. Update if Google promotes a newer one. */
-const MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
+/** Native-audio dialog models, tried in order — Google retires preview
+ *  model IDs, so a dead one falls through instead of breaking the app. */
+const MODELS = [
+  'models/gemini-2.5-flash-native-audio-preview-12-2025',
+  'models/gemini-2.5-flash-preview-native-audio-dialog',
+];
 
 /** UTF-8 bytes → string, for Hermes builds without TextDecoder. */
 function utf8BytesToString(bytes: Uint8Array): string {
@@ -67,6 +71,12 @@ export class GeminiLiveSession {
   private ready = false;
   private pendingAudio: string[] = [];
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private apiKey = '';
+  private systemInstruction = '';
+  private modelIdx = 0;
+  private resumeHandle: string | null = null;
+  private reconnects = 0;
+  private ended = true;
 
   constructor(
     private handlers: LiveHandlers,
@@ -74,7 +84,17 @@ export class GeminiLiveSession {
   ) {}
 
   connect(apiKey: string, systemInstruction: string) {
-    this.ws = new WebSocket(`${WS_URL}?key=${encodeURIComponent(apiKey)}`);
+    this.apiKey = apiKey;
+    this.systemInstruction = systemInstruction;
+    this.ended = false;
+    this.modelIdx = 0;
+    this.resumeHandle = null;
+    this.reconnects = 0;
+    this.openSocket();
+  }
+
+  private openSocket() {
+    this.ws = new WebSocket(`${WS_URL}?key=${encodeURIComponent(this.apiKey)}`);
     // RN delivers ws payloads as Blobs — decode to text before JSON.parse,
     // otherwise setupComplete is silently dropped and the call never starts.
     this.ws.binaryType = 'blob';
@@ -90,7 +110,10 @@ export class GeminiLiveSession {
     this.ws.onopen = () => {
       this.send({
         setup: {
-          model: MODEL,
+          model: MODELS[this.modelIdx],
+          // Lets the session survive a dropped socket: the server issues a
+          // handle we can hand back on reconnect instead of losing the call.
+          sessionResumption: this.resumeHandle ? { handle: this.resumeHandle } : {},
           generationConfig: {
             responseModalities: ['AUDIO'],
             speechConfig: {
@@ -101,7 +124,7 @@ export class GeminiLiveSession {
             parts: [
               {
                 text:
-                  systemInstruction +
+                  this.systemInstruction +
                   '\n\nTake exactly ONE turn at a time: one question or one short ' +
                   'point, then STOP and wait in silence for the student to ' +
                   'reply. Never stack questions, never fill silence by yourself, ' +
@@ -140,11 +163,43 @@ export class GeminiLiveSession {
       void this.dispatchMessage(event.data);
     };
 
-    this.ws.onerror = () => this.handlers.onError('WebSocket error — check API key & network.');
-    this.ws.onclose = () => {
-      this.ready = false;
-      this.handlers.onClose();
+    // Surface errors through the close path — mid-call failures get a
+    // resume attempt there instead of an instant error screen.
+    this.ws.onerror = () => {
+      try {
+        this.ws?.close();
+      } catch {}
     };
+    this.ws.onclose = () => this.handleClose();
+  }
+
+  private handleClose() {
+    this.ready = false;
+    if (this.ended) {
+      this.handlers.onClose();
+      return;
+    }
+    if (!this.resumeHandle) {
+      // Never got a session: a rejected setup (e.g. retired model id) —
+      // walk the model list before declaring the call dead.
+      if (this.modelIdx + 1 < MODELS.length) {
+        this.modelIdx++;
+        this.openSocket();
+        return;
+      }
+      this.handlers.onClose();
+      return;
+    }
+    // Mid-call drop: retry with the resumption handle a couple of times —
+    // the server keeps the session alive for a short window.
+    if (this.reconnects < 3) {
+      this.reconnects++;
+      setTimeout(() => {
+        if (!this.ended) this.openSocket();
+      }, 700 * this.reconnects);
+      return;
+    }
+    this.handlers.onClose();
   }
 
   private async dispatchMessage(data: unknown) {
@@ -182,6 +237,7 @@ export class GeminiLiveSession {
   private handleMessage(msg: any) {
     if (msg.setupComplete) {
       this.ready = true;
+      this.reconnects = 0;
       if (this.connectTimer) {
         clearTimeout(this.connectTimer);
         this.connectTimer = null;
@@ -190,6 +246,14 @@ export class GeminiLiveSession {
       this.pendingAudio = [];
       this.handlers.onReady();
       return;
+    }
+
+    // Server-issued handle that lets a dropped socket resume the same
+    // session — refresh it whenever a new one arrives.
+    const update = msg.sessionResumptionUpdate;
+    if (update?.newHandle) {
+      if (update.resumable === false) this.resumeHandle = null;
+      else this.resumeHandle = update.newHandle;
     }
 
     const sc = msg.serverContent;
@@ -245,6 +309,7 @@ export class GeminiLiveSession {
   }
 
   end() {
+    this.ended = true;
     this.ready = false;
     if (this.connectTimer) {
       clearTimeout(this.connectTimer);

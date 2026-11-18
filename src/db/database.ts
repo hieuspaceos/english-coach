@@ -147,6 +147,14 @@ export const queries = {
     );
   },
 
+  allAudioUris(): string[] {
+    return db
+      .getAllSync<{ audio_uri: string }>(
+        'SELECT audio_uri FROM sessions WHERE audio_uri IS NOT NULL',
+      )
+      .map((r) => r.audio_uri);
+  },
+
   getSession(id: number) {
     return db.getFirstSync<{ analysis_json: string | null }>(
       'SELECT analysis_json FROM sessions WHERE id = ?',

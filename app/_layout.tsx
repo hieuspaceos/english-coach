@@ -30,6 +30,18 @@ export default function RootLayout() {
     getApiKey().then(setApiKey);
     setCoins(queries.getCoins());
     void setupNotifications();
+    // Delete .m4a files whose session row is gone (crashed calls, resets).
+    void (async () => {
+      try {
+        const { Paths, File } = await import('expo-file-system');
+        const keep = new Set(queries.allAudioUris());
+        for (const item of Paths.document.list()) {
+          if (item instanceof File && item.name.endsWith('.m4a') && !keep.has(item.uri)) {
+            item.delete();
+          }
+        }
+      } catch {}
+    })();
   }, [setApiKey, setCoins]);
 
   // Don't render anything until the brand font is on disk — a single
