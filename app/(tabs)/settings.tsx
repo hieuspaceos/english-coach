@@ -46,7 +46,12 @@ export default function SettingsScreen() {
   }, [apiKey]);
 
   const save = async () => {
-    await setApiKey(value);
+    try {
+      await setApiKey(value);
+    } catch {
+      Alert.alert('Lỗi', 'Không lưu được key vào SecureStore.');
+      return;
+    }
     setKey(value.trim());
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);

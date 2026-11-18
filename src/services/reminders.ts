@@ -63,9 +63,12 @@ export async function syncPracticeReminder(): Promise<void> {
     fireAt.setDate(fireAt.getDate() + 1);
   }
 
+  // When the reminder fires tomorrow, "hôm nay X/Y" counts computed now
+  // would be stale — only the streak line stays meaningful by then.
+  const firesTomorrow = dayStr(fireAt) !== today;
   const body =
     streak > 0
-      ? goal > 1 && doneToday > 0
+      ? goal > 1 && doneToday > 0 && !firesTomorrow
         ? `Chuỗi ${streak} ngày — hôm nay ${doneToday}/${goal} phiên, nốt ${goal - doneToday} là xong`
         : `Chuỗi ${streak} ngày đang chờ — 1 phiên nữa là giữ được lửa`
       : 'Hôm nay chưa luyện — 1 phiên ngắn để bắt đầu lại nào';

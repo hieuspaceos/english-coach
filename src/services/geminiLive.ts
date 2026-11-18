@@ -175,6 +175,12 @@ export class GeminiLiveSession {
 
   private handleClose() {
     this.ready = false;
+    // A retry gets its own fresh timer — the old socket's 20s watchdog must
+    // not fire mid-reconnect and kill a healthy attempt.
+    if (this.connectTimer) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
     if (this.ended) {
       this.handlers.onClose();
       return;
@@ -261,6 +267,9 @@ export class GeminiLiveSession {
 
     if (sc.interrupted) {
       this.handlers.onInterrupted();
+      // Any modelTurn parts in this same frame belong to the dead turn —
+      // enqueuing them after the player's flush would replay stale audio.
+      return;
     }
 
     for (const part of sc.modelTurn?.parts ?? []) {

@@ -86,6 +86,8 @@ export default function CategoryScreen() {
       );
       setTopic('');
       reload();
+    } catch {
+      Alert.alert('Lỗi', 'Không sinh được bài luyện. Kiểm tra mạng rồi thử lại.');
     } finally {
       setGenerating(false);
     }

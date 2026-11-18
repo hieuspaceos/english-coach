@@ -7,6 +7,7 @@ import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
 } from 'expo-audio';
+import { useKeepAwake } from 'expo-keep-awake';
 import { queries, PitchRow } from '../src/db/database';
 import { F } from '../src/theme';
 
@@ -50,6 +51,7 @@ function PitchItem({ item }: { item: PitchRow }) {
 }
 
 export default function PitchScreen() {
+  useKeepAwake('pitch'); // a 2-minute take must not lose the screen to sleep
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [recording, setRecording] = useState(false);
   const [seconds, setSeconds] = useState(0);
@@ -76,10 +78,14 @@ export default function PitchScreen() {
 
   const toggle = async () => {
     if (recording) {
-      await recorder.stop();
-      const uri = recorder.uri;
-      if (uri) {
-        queries.insertPitch(uri, null, seconds);
+      try {
+        await recorder.stop();
+        const uri = recorder.uri;
+        if (uri) {
+          queries.insertPitch(uri, null, seconds);
+        }
+      } catch {
+        Alert.alert('Lỗi', 'Không lưu được bản ghi.');
       }
       setRecording(false);
       reload();
@@ -90,11 +96,15 @@ export default function PitchScreen() {
       Alert.alert('Microphone', 'Cần quyền micro để ghi âm.');
       return;
     }
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    startedRef.current = Date.now();
-    setSeconds(0);
-    setRecording(true);
+    try {
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      startedRef.current = Date.now();
+      setSeconds(0);
+      setRecording(true);
+    } catch {
+      Alert.alert('Lỗi', 'Không mở được micro để ghi.');
+    }
   };
 
   const mm = Math.floor(seconds / 60);

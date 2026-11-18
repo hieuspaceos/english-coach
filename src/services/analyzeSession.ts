@@ -98,18 +98,30 @@ export async function analyzeTranscript(
   });
 
   for (const model of ANALYSIS_MODELS) {
+    // fetch has no default timeout on RN — a stalled request would pin the
+    // review screen on "Đang chấm bài..." forever.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
     try {
       const res = await fetch(
         `${REST_BASE}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body },
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          signal: controller.signal,
+        },
       );
       if (!res.ok) {
         console.warn(`[analyze] ${model} → HTTP ${res.status}`);
         continue;
       }
       const json = await res.json();
-      const text: string | undefined =
-        json.candidates?.[0]?.content?.parts?.[0]?.text;
+      // parts[0] can be a thought part on thinking models — take the first
+      // part that actually carries text.
+      const text: string | undefined = json.candidates?.[0]?.content?.parts?.find(
+        (p: { text?: string }) => typeof p.text === 'string',
+      )?.text;
       if (!text) continue;
       try {
         return JSON.parse(text) as AnalysisResult;
@@ -118,6 +130,8 @@ export async function analyzeTranscript(
       }
     } catch (e) {
       console.warn(`[analyze] ${model} →`, e);
+    } finally {
+      clearTimeout(timer);
     }
   }
   return null;

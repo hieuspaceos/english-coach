@@ -288,12 +288,19 @@ export const queries = {
   },
 
   /** Wipe all learning data — profile, settings, API key and custom
-   *  scenarios survive; sessions/errors/vocab/pitches/coins do not. */
+   *  scenarios survive; sessions/errors/vocab/pitches/coins and every
+   *  streak/penalty record do not. */
   resetProgress() {
     db.execSync(
       'DELETE FROM sessions; DELETE FROM errors; DELETE FROM vocab; DELETE FROM pitches;',
     );
     this.setMeta('coins', '0');
+    // Streaks, celebrated ranks and charged penalty days must reset too —
+    // otherwise the first new streak would silently inherit an old
+    // penalty_through watermark or skip an already-celebrated tier.
+    for (const k of ['best_streak', 'last_rank_idx', 'penalty_through']) {
+      db.runSync('DELETE FROM meta WHERE key = ?', k);
+    }
   },
 
   getMeta(key: string): string | null {
@@ -321,15 +328,6 @@ export const queries = {
        ON CONFLICT(key) DO UPDATE SET value = CAST(MAX(0, CAST(value AS INTEGER) + ?) AS TEXT)`,
       String(Math.max(0, n)), n,
     );
-  },
-
-  /** Distinct local calendar days (YYYY-MM-DD) with at least one session. */
-  practiceDays(): string[] {
-    return db
-      .getAllSync<{ day: string }>(
-        "SELECT DISTINCT date(started_at/1000, 'unixepoch', 'localtime') AS day FROM sessions",
-      )
-      .map((r) => r.day);
   },
 
   /** Per-day session counts — needed when the daily goal is > 1 session. */

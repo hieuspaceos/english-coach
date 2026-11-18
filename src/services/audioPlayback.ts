@@ -47,6 +47,10 @@ export class PcmPlayer {
       // Failsafe: if buffer-ended callbacks get dropped, release once all
       // enqueued audio has had time to play out — never gate the mic forever.
       this.pendingBuffers = 0;
+      // Rebase the failsafe clock too — without this, wall-time gaps between
+      // turns keep shrinking the window until it releases mid-utterance.
+      this.queuedSec = 0;
+      this.playbackStartedAt = Date.now();
       return false;
     }
     return true;

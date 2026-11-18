@@ -6,8 +6,11 @@
 
 import { learnerFieldEn, learnerTopics } from './profile';
 
-const REST_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent';
+const REST_BASE =
+  'https://generativelanguage.googleapis.com/v1beta/models';
+// Tried in order — same fallback idea as analyzeSession: quota/retirement
+// on the first model shouldn't kill scenario generation outright.
+const MODELS = ['gemini-3.1-flash-lite', 'gemini-2.5-flash-lite'];
 
 export interface GeneratedScenario {
   title: string;
@@ -53,23 +56,32 @@ export async function generateScenario(
     .replace('<<<TOPIC>>>', topic)
     .replace('<<<CATEGORY>>>', categoryLabel)
     .replace('<<<LEARNER_FIELD>>>', fieldDesc);
-  const res = await fetch(`${REST_URL}?key=${encodeURIComponent(apiKey)}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json' },
-    }),
+  const body = JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json' },
   });
-  if (!res.ok) return null;
-  const text: string | undefined = (await res.json()).candidates?.[0]
-    ?.content?.parts?.[0]?.text;
-  if (!text) return null;
-  try {
-    return JSON.parse(text) as GeneratedScenario;
-  } catch {
-    return null;
+
+  for (const model of MODELS) {
+    try {
+      const res = await fetch(
+        `${REST_BASE}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        },
+      );
+      if (!res.ok) continue;
+      const text: string | undefined = (await res.json()).candidates?.[0]
+        ?.content?.parts?.find((p: { text?: string }) => typeof p.text === 'string')
+        ?.text;
+      if (!text) continue;
+      return JSON.parse(text) as GeneratedScenario;
+    } catch {
+      // network error or bad JSON — try the next model
+    }
   }
+  return null;
 }
 
 import { COMMON } from '../scenarios';

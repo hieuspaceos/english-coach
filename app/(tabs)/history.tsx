@@ -14,13 +14,10 @@ import { AnalysisResult } from '../../src/services/analyzeSession';
 import { AudioPlayButton } from '../../src/components/AudioPlayButton';
 import { F } from '../../src/theme';
 
-function scenarioTitle(id: string): string {
+function scenarioTitle(id: string, customTitles: Record<string, string>): string {
   const builtin = SCENARIOS.find((s) => s.id === id)?.title;
   if (builtin) return builtin;
-  if (id.startsWith('custom-')) {
-    return queries.listCustomScenarios().find((c) => c.id === id)?.title
-      ?? 'Bài luyện tự tạo';
-  }
+  if (id.startsWith('custom-')) return customTitles[id] ?? 'Bài luyện tự tạo';
   return id;
 }
 
@@ -33,7 +30,13 @@ function parseAnalysis(json: string | null): AnalysisResult | null {
   }
 }
 
-function SessionItem({ item }: { item: SessionRow }) {
+function SessionItem({
+  item,
+  customTitles,
+}: {
+  item: SessionRow;
+  customTitles: Record<string, string>;
+}) {
   const [open, setOpen] = useState(false);
   const [showTranscript, setShowTranscript] = useState(false);
   const analysis = parseAnalysis(item.analysis_json);
@@ -42,7 +45,7 @@ function SessionItem({ item }: { item: SessionRow }) {
     <View>
       <Pressable style={styles.row} onPress={() => setOpen(!open)}>
         <View style={styles.rowText}>
-          <Text style={styles.title}>{scenarioTitle(item.scenario_id)}</Text>
+          <Text style={styles.title}>{scenarioTitle(item.scenario_id, customTitles)}</Text>
           <Text style={styles.sub}>
             {new Date(item.started_at).toLocaleDateString('vi-VN')} ·{' '}
             {Math.round(item.duration_sec / 60)} phút
@@ -122,11 +125,18 @@ export default function HistoryScreen() {
   const router = useRouter();
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [pitches, setPitches] = useState<PitchRow[]>([]);
+  const [customTitles, setCustomTitles] = useState<Record<string, string>>({});
 
   useFocusEffect(
     useCallback(() => {
       setSessions(queries.listSessions());
       setPitches(queries.listPitches(5));
+      // Loaded once per focus — scenarioTitle must not hit SQLite per row.
+      setCustomTitles(
+        Object.fromEntries(
+          queries.listCustomScenarios().map((c) => [c.id, c.title]),
+        ),
+      );
     }, []),
   );
 
@@ -145,7 +155,7 @@ export default function HistoryScreen() {
               <View style={styles.rowText}>
                 <Text style={styles.title}>Pitch hàng tuần</Text>
                 <Text style={styles.sub}>
-                  {pitches.length} bản đã ghi · ghi 1 bài/tuần để đo tiến bộ
+                  {pitches.length} bản gần nhất · ghi 1 bài/tuần để đo tiến bộ
                 </Text>
               </View>
               <Text style={styles.chevron}>›</Text>
@@ -161,7 +171,7 @@ export default function HistoryScreen() {
             </Text>
           </View>
         }
-        renderItem={({ item }) => <SessionItem item={item} />}
+        renderItem={({ item }) => <SessionItem item={item} customTitles={customTitles} />}
       />
     </View>
   );

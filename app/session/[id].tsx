@@ -96,6 +96,8 @@ export default function SessionScreen() {
   const dropAudioRef = useRef(false);
   const [showChat, setShowChat] = useState(false);
   const [chatLines, setChatLines] = useState<Line[]>([]);
+  const chatRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
+  const drillMarkedRef = useRef(false);
 
   const pushLine = useCallback((who: 'user' | 'client', text: string) => {
     const trimmed = text.trim();
@@ -160,9 +162,10 @@ export default function SessionScreen() {
     const sid = sessionIdRef.current;
     if (sid != null) {
       queries.finishSession(sid, durationSec, transcript, null);
-      // +10 only for a real practice call — dropped/phantom sessions that
-      // die seconds after connecting must not farm coins.
-      if (durationSec >= 30) {
+      // +10 only for a real practice call — the learner must actually have
+      // said something (a silent 30s in a deleted session farms nothing).
+      const saidSomething = linesRef.current.some((l) => l.who === 'user');
+      if (durationSec >= 30 && saidSomething) {
         queries.addCoins(10);
         useCoachStore.getState().addCoins(10);
         setEarned(true);
@@ -199,12 +202,25 @@ export default function SessionScreen() {
     if (sid != null && apiKey && transcript) {
       const analysis = await analyzeTranscript(apiKey, transcript);
       if (analysis) {
-        queries.saveAnalysis(sid, JSON.stringify(analysis));
-        for (const e of analysis.errors ?? []) {
-          queries.insertError(sid, e.key ?? null, e.said, e.correct, e.category, e.note_vi);
-        }
-        for (const v of analysis.vocab ?? []) {
-          queries.upsertVocab(v.term, v.meaning_vi, v.example, sid);
+        // AI output is untrusted — a missing field must not throw into
+        // NOT NULL columns and wedge this screen on "analyzing" forever.
+        try {
+          queries.saveAnalysis(sid, JSON.stringify(analysis));
+          for (const e of analysis.errors ?? []) {
+            if (!e?.said || !e?.correct) continue;
+            queries.insertError(
+              sid, e.key ?? null, e.said, e.correct,
+              e.category ?? 'other', e.note_vi ?? null,
+            );
+          }
+          for (const v of analysis.vocab ?? []) {
+            if (!v?.term) continue;
+            queries.upsertVocab(
+              v.term.trim().toLowerCase(), v.meaning_vi ?? '', v.example ?? null, sid,
+            );
+          }
+        } catch (e) {
+          console.warn('[session] saving analysis failed:', e);
         }
         setResult(analysis);
       }
@@ -232,15 +248,23 @@ export default function SessionScreen() {
       setStatus('error');
       return;
     }
-    startedAtRef.current = Date.now();
     const player = new PcmPlayer(24000);
     playerRef.current = player;
 
     const session = new GeminiLiveSession({
       onReady: async () => {
         // A resumed socket fires onReady again — the recorder and the DB
-        // row already exist, so just let the call continue.
-        if (statusRef.current === 'live') return;
+        // row already exist, so just let the call continue. But release the
+        // mic gate first: if the old socket died mid-model-turn, no
+        // turnComplete is coming to clear it, and the learner would be
+        // muted behind a phantom "AI speaking" state.
+        if (statusRef.current === 'live') {
+          aiSpeakingRef.current = false;
+          setAiSpeaking(false);
+          dropAudioRef.current = false;
+          lastModelAudioAtRef.current = 0;
+          return;
+        }
         try {
           // iOS: play AI voice + record mic simultaneously, ignore silent switch
           await setAudioModeAsync({
@@ -295,6 +319,9 @@ export default function SessionScreen() {
             },
           });
           // Player starts itself after buffering ~0.35s — no explicit start.
+          // Duration is measured from here — connect time must not count
+          // toward the +10 coin threshold.
+          startedAtRef.current = Date.now();
           setStatus('live');
           // Only record the session once the call is actually live —
           // failed connects shouldn't leave empty rows in history.
@@ -401,10 +428,11 @@ export default function SessionScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Drill mode: show the outline as a marked first line — visible in chat
-  // mode during the call and kept in the saved transcript as context.
+  // Drill mode: show the outline as a marked first line in the chat strip.
+  // Deliberately NOT pushed to linesRef — it isn't speech, so it must stay
+  // out of the saved transcript the analyzer scores.
   useEffect(() => {
-    if (!drill || linesRef.current.length) return;
+    if (!drill || drillMarkedRef.current) return;
     let outline: { step_vi: string; en: string }[] = [];
     try {
       outline = JSON.parse(
@@ -412,13 +440,15 @@ export default function SessionScreen() {
       )?.outline ?? [];
     } catch {}
     if (outline.length) {
-      linesRef.current.push({
-        who: 'user',
-        text:
-          '🎯 Luyện theo dàn ý: ' +
-          outline.map((o, i) => `${i + 1}. ${o.step_vi}`).join(' | '),
-      });
-      setChatLines([...linesRef.current]);
+      drillMarkedRef.current = true;
+      setChatLines([
+        {
+          who: 'client',
+          text:
+            '🎯 Luyện theo dàn ý: ' +
+            outline.map((o, i) => `${i + 1}. ${o.step_vi}`).join(' | '),
+        },
+      ]);
     }
   }, [drill]);
 
@@ -435,8 +465,10 @@ export default function SessionScreen() {
     return () => loop.stop();
   }, [status, pulse]);
 
-  const mm = Math.floor(secondsLeft / 60);
-  const ss = String(secondsLeft % 60).padStart(2, '0');
+  // Clamp at 0 — the auto-end effect fires one frame after the last tick,
+  // and -1 would flash as "-1:-1" first.
+  const mm = Math.floor(Math.max(0, secondsLeft) / 60);
+  const ss = String(Math.max(0, secondsLeft) % 60).padStart(2, '0');
 
   return (
     <View style={styles.container}>
@@ -461,9 +493,7 @@ export default function SessionScreen() {
           >
             {status === 'connecting' ? (
               <ActivityIndicator color="#fff" />
-            ) : (
-              <View style={styles.orbInner} />
-            )}
+            ) : null}
           </Animated.View>
           <Text style={styles.statusText}>
             {status === 'connecting' && 'Đang kết nối...'}
@@ -480,7 +510,12 @@ export default function SessionScreen() {
             {status === 'error' && (errMsg ?? 'Không kết nối được. Kiểm tra API key / mạng.')}
           </Text>
           {status === 'live' && showChat && (
-            <ScrollView style={styles.chatBox} nestedScrollEnabled>
+            <ScrollView
+              ref={chatRef}
+              style={styles.chatBox}
+              nestedScrollEnabled
+              onContentSizeChange={() => chatRef.current?.scrollToEnd({ animated: false })}
+            >
               {chatLines.map((l, i) => (
                 <Text key={i} style={styles.chatLine}>
                   <Text style={l.who === 'user' ? styles.chatWhoUser : styles.chatWhoClient}>
@@ -598,7 +633,9 @@ export default function SessionScreen() {
             </>
           ) : (
             <Text style={styles.comment}>
-              Không chấm được bài (phiên quá ngắn hoặc lỗi API). Transcript vẫn đã lưu.
+              {sessionIdRef.current == null
+                ? 'Phiên chưa kết nối được — chưa có gì để chấm.'
+                : 'Không chấm được bài (phiên quá ngắn hoặc lỗi API). Transcript vẫn đã lưu.'}
             </Text>
           )}
 
@@ -650,12 +687,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#111',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  orbInner: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: '#111',
   },
   orbError: { backgroundColor: '#ddd' },
   statusText: { marginTop: 48, fontSize: 15, color: '#888', fontFamily: F.regular },

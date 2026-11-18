@@ -57,7 +57,7 @@ export default function TabsLayout() {
         options={{
           title: 'Luyện',
           tabBarShowLabel: false,
-          tabBarButton: ({ ref: _ref, ...props }) => (
+          tabBarButton: ({ ref: _ref, children: _children, ...props }) => (
             <Pressable
               {...props}
               style={({ pressed }) => [
