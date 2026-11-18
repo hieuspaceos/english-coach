@@ -98,6 +98,7 @@ export default function SessionScreen() {
   const [chatLines, setChatLines] = useState<Line[]>([]);
   const chatRef = useRef<React.ComponentRef<typeof ScrollView>>(null);
   const drillMarkedRef = useRef(false);
+  const wentLiveRef = useRef(false);
 
   const pushLine = useCallback((who: 'user' | 'client', text: string) => {
     const trimmed = text.trim();
@@ -258,13 +259,17 @@ export default function SessionScreen() {
         // mic gate first: if the old socket died mid-model-turn, no
         // turnComplete is coming to clear it, and the learner would be
         // muted behind a phantom "AI speaking" state.
-        if (statusRef.current === 'live') {
+        if (statusRef.current === 'live' || wentLiveRef.current) {
           aiSpeakingRef.current = false;
           setAiSpeaking(false);
           dropAudioRef.current = false;
           lastModelAudioAtRef.current = 0;
           return;
         }
+        // Latch BEFORE the awaited recorder start: if the socket drops and
+        // resumes while that await is in flight, the second onReady must take
+        // the resume path — not start the recorder twice and kill the call.
+        wentLiveRef.current = true;
         try {
           // iOS: play AI voice + record mic simultaneously, ignore silent switch
           await setAudioModeAsync({
