@@ -1,0 +1,31 @@
+diff --git a/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt b/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt
+index 7d1e913f68b79915c9347d7e4eb6e441f54076e9..c671d1e8ace7077c430706c7e6060c03465e245c 100644
+--- a/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt
++++ b/android/src/main/java/net/siteed/audiostudio/AudioRecorderManager.kt
+@@ -680,7 +680,7 @@ class AudioRecorderManager(
+         }
+ 
+         val audioRecord = AudioRecord(
+-            MediaRecorder.AudioSource.MIC,
++            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+             sampleRate,
+             channelConfig,
+             format,
+@@ -976,7 +976,7 @@ class AudioRecorderManager(
+                 LogUtils.d(CLASS_NAME, "Initializing AudioRecord with format: $audioFormat, BufferSize: $bufferSizeInBytes")
+ 
+                 audioRecord = AudioRecord(
+-                    MediaRecorder.AudioSource.MIC,
++                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                     recordingConfig.sampleRate,
+                     if (recordingConfig.channels == 1) AudioFormat.CHANNEL_IN_MONO else AudioFormat.CHANNEL_IN_STEREO,
+                     audioFormat,
+@@ -1964,7 +1964,7 @@ class AudioRecorderManager(
+             }
+ 
+             compressedRecorder?.apply {
+-                setAudioSource(MediaRecorder.AudioSource.MIC)
++                setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                 
+                 // Choose output format based on codec and preferRawStream flag
+                 val outputFormat = when (recordingConfig.output.compressed.format) {

@@ -19,9 +19,11 @@ import { GeminiLiveSession } from '../../src/services/geminiLive';
 import { PcmPlayer } from '../../src/services/audioPlayback';
 import { analyzeTranscript, AnalysisResult } from '../../src/services/analyzeSession';
 import { learnerContext } from '../../src/services/profile';
+import { getTalkMode } from '../../src/services/gamification';
 import { queries } from '../../src/db/database';
 import { useCoachStore } from '../../src/state/store';
 import { AudioPlayButton } from '../../src/components/AudioPlayButton';
+import { Ionicons } from '@expo/vector-icons';
 import { F } from '../../src/theme';
 
 const MAX_SECONDS = 20 * 60;
@@ -44,7 +46,7 @@ function int16ToBase64(samples: Int16Array): string {
 }
 
 export default function SessionScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, drill } = useLocalSearchParams<{ id: string; drill?: string }>();
   // Memoized: the 1s countdown re-renders this screen constantly, and the
   // custom-scenario lookup below hits SQLite — it must not run per render.
   const scenario = useMemo(
@@ -75,7 +77,6 @@ export default function SessionScreen() {
 
   const sessionRef = useRef<GeminiLiveSession | null>(null);
   const playerRef = useRef<PcmPlayer | null>(null);
-  const lastModelAudioAtRef = useRef(0);
   const startedAtRef = useRef(0);
   const sessionIdRef = useRef<number | null>(null);
   const pendingRef = useRef<{ user: string; client: string }>({ user: '', client: '' });
@@ -83,9 +84,25 @@ export default function SessionScreen() {
   const endingRef = useRef(false);
   const pulse = useRef(new Animated.Value(1)).current;
 
+  // Conversation mode: 'push' = tap Nói/Gửi per turn; 'auto' = server VAD
+  // decides turn ends and the mic self-mutes while the model speaks.
+  const talkMode = useMemo(() => getTalkMode(), []);
+  const pushToTalkRef = useRef(talkMode === 'push');
+  const [talking, setTalking] = useState(false);
+  const talkingRef = useRef(false);
+  const [aiSpeaking, setAiSpeaking] = useState(false);
+  const aiSpeakingRef = useRef(false);
+  const lastModelAudioAtRef = useRef(0);
+  const dropAudioRef = useRef(false);
+  const [showChat, setShowChat] = useState(false);
+  const [chatLines, setChatLines] = useState<Line[]>([]);
+
   const pushLine = useCallback((who: 'user' | 'client', text: string) => {
     const trimmed = text.trim();
-    if (trimmed) linesRef.current.push({ who, text: trimmed });
+    if (trimmed) {
+      linesRef.current.push({ who, text: trimmed });
+      setChatLines((ls) => [...ls, { who, text: trimmed }]);
+    }
   }, []);
 
   const flush = useCallback(() => {
@@ -96,6 +113,37 @@ export default function SessionScreen() {
       }
     }
   }, [pushLine]);
+
+  // Press "Nói" → hold a turn; press "Gửi" → turn ends, model responds.
+  const toggleTalk = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session || statusRef.current !== 'live') return;
+    if (talkingRef.current) {
+      talkingRef.current = false;
+      setTalking(false);
+      session.activityEnd();
+      flush();
+    } else {
+      // Deliberate barge-in: cut the model off, then take the floor.
+      playerRef.current?.flush();
+      aiSpeakingRef.current = false;
+      setAiSpeaking(false);
+      talkingRef.current = true;
+      setTalking(true);
+      dropAudioRef.current = true; // stale chunks of the cut turn must not play later
+      session.activityStart();
+    }
+  }, [flush]);
+
+  // Auto mode: drop the model's voice so the learner can take the floor.
+  // dropAudioRef keeps muting the tail of the interrupted turn — chunks keep
+  // arriving server-side until its turnComplete, and must never be heard.
+  const barge = useCallback(() => {
+    playerRef.current?.flush();
+    dropAudioRef.current = true;
+    aiSpeakingRef.current = false;
+    setAiSpeaking(false);
+  }, []);
 
   const endCall = useCallback(async () => {
     if (endingRef.current) return;
@@ -213,12 +261,20 @@ export default function SessionScreen() {
               compressed: { enabled: true, format: 'aac' },
             },
             onAudioStream: async (event) => {
-              // Half-duplex: while the model is talking, don't stream the
-              // mic — speaker echo and room noise otherwise feed its VAD.
-              // Gate on recent model audio too, not just the local queue:
-              // when streaming keeps pace with playback the queue is near
-              // empty while the model is still mid-sentence.
-              if (player.isBusy || Date.now() - lastModelAudioAtRef.current < 1500) return;
+              if (pushToTalkRef.current) {
+                // Push-to-talk: mic streams only while the user holds a turn.
+                if (!talkingRef.current) return;
+              } else {
+                // Free-flow: a real conversation never overlaps — while the
+                // model talks (or just did), the mic stays muted. AEC covers
+                // whatever echo the mute doesn't reach.
+                if (
+                  aiSpeakingRef.current ||
+                  player.isBusy ||
+                  Date.now() - lastModelAudioAtRef.current < 800
+                )
+                  return;
+              }
               const d = event.data;
               if (typeof d === 'string') {
                 session.sendAudioChunk(d);
@@ -246,7 +302,20 @@ export default function SessionScreen() {
         }
       },
       onAudio: (b64) => {
-        lastModelAudioAtRef.current = Date.now();
+        const now = Date.now();
+        // Push-mode barge-in: drop the model's voice while the user talks.
+        if (talkingRef.current) return;
+        if (dropAudioRef.current) {
+          if (now - lastModelAudioAtRef.current < 1500) {
+            // Still the interrupted turn's tail — keep dropping.
+            lastModelAudioAtRef.current = now;
+            return;
+          }
+          dropAudioRef.current = false; // old turn went silent — this is a new one
+        }
+        lastModelAudioAtRef.current = now;
+        aiSpeakingRef.current = true;
+        setAiSpeaking(true);
         player.enqueue(b64);
       },
       onUserText: (t) => {
@@ -257,9 +326,17 @@ export default function SessionScreen() {
         if (pendingRef.current.user) flush();
         pendingRef.current.client += t;
       },
-      onTurnEnd: () => flush(),
+      onTurnEnd: () => {
+        flush();
+        dropAudioRef.current = false;
+        aiSpeakingRef.current = false;
+        setAiSpeaking(false);
+      },
       onInterrupted: () => {
         flush();
+        dropAudioRef.current = false;
+        aiSpeakingRef.current = false;
+        setAiSpeaking(false);
         playerRef.current?.flush();
       },
       onError: () => setStatus('error'),
@@ -274,7 +351,7 @@ export default function SessionScreen() {
           setStatus('error');
         }
       },
-    });
+    }, pushToTalkRef.current);
     sessionRef.current = session;
 
     // Mic permission is a runtime dialog on Android — request it BEFORE
@@ -288,7 +365,26 @@ export default function SessionScreen() {
         setStatus('error');
         return;
       }
-      session.connect(apiKey, scenario.systemPrompt + learnerContext());
+      // Drill mode ("luyện lại theo dàn ý"): feed the saved outline back into
+      // the partner's brief so it steers the conversation through each step.
+      let prompt = scenario.systemPrompt + learnerContext();
+      if (drill) {
+        let outline: { step_vi: string; en: string }[] = [];
+        try {
+          outline = JSON.parse(queries.getSession(Number(drill))?.analysis_json ?? 'null')
+            ?.outline ?? [];
+        } catch {}
+        if (outline.length) {
+          prompt +=
+            '\n\nThe student is re-practicing with this answer outline:\n' +
+            outline.map((o, i) => `${i + 1}. ${o.step_vi} — e.g. "${o.en}"`).join('\n') +
+            '\nGuide the conversation so they can deliver each step in order — ' +
+            'ask the questions a real client or interviewer would ask to hit ' +
+            'each step. If they skip a step, gently prompt for it. Stay in ' +
+            'character; do not recite the outline.';
+        }
+      }
+      session.connect(apiKey, prompt);
     })();
 
     return () => {
@@ -301,6 +397,27 @@ export default function SessionScreen() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Drill mode: show the outline as a marked first line — visible in chat
+  // mode during the call and kept in the saved transcript as context.
+  useEffect(() => {
+    if (!drill || linesRef.current.length) return;
+    let outline: { step_vi: string; en: string }[] = [];
+    try {
+      outline = JSON.parse(
+        queries.getSession(Number(drill))?.analysis_json ?? 'null',
+      )?.outline ?? [];
+    } catch {}
+    if (outline.length) {
+      linesRef.current.push({
+        who: 'user',
+        text:
+          '🎯 Luyện theo dàn ý: ' +
+          outline.map((o, i) => `${i + 1}. ${o.step_vi}`).join(' | '),
+      });
+      setChatLines([...linesRef.current]);
+    }
+  }, [drill]);
 
   // Gentle pulse while live — ChatGPT-orb style
   useEffect(() => {
@@ -347,12 +464,65 @@ export default function SessionScreen() {
           </Animated.View>
           <Text style={styles.statusText}>
             {status === 'connecting' && 'Đang kết nối...'}
-            {status === 'live' && 'Đang nghe — cứ nói'}
+            {status === 'live' &&
+              (pushToTalkRef.current
+                ? talking
+                  ? 'Đang ghi — bấm Gửi khi xong'
+                  : aiSpeaking
+                    ? 'AI đang nói...'
+                    : 'Bấm Nói rồi trả lời'
+                : aiSpeaking
+                  ? 'AI đang nói...'
+                  : 'Đang nghe — cứ nói tự nhiên')}
             {status === 'error' && (errMsg ?? 'Không kết nối được. Kiểm tra API key / mạng.')}
           </Text>
-          <Pressable style={styles.endBtn} onPress={status === 'error' ? () => router.back() : endCall}>
-            <Text style={styles.endBtnText}>{status === 'error' ? 'Quay lại' : 'Kết thúc'}</Text>
-          </Pressable>
+          {status === 'live' && showChat && (
+            <ScrollView style={styles.chatBox} nestedScrollEnabled>
+              {chatLines.map((l, i) => (
+                <Text key={i} style={styles.chatLine}>
+                  <Text style={l.who === 'user' ? styles.chatWhoUser : styles.chatWhoClient}>
+                    {l.who === 'user' ? 'Bạn: ' : 'Khách: '}
+                  </Text>
+                  {l.text}
+                </Text>
+              ))}
+            </ScrollView>
+          )}
+          {status === 'error' ? (
+            <Pressable style={styles.endBtn} onPress={() => router.back()}>
+              <Text style={styles.endBtnText}>Quay lại</Text>
+            </Pressable>
+          ) : (
+            <>
+              {pushToTalkRef.current ? (
+                <Pressable style={[styles.talkBtn, talking && styles.talkBtnOn]} onPress={toggleTalk}>
+                  <Ionicons name={talking ? 'send' : 'mic'} size={20} color="#fff" />
+                  <Text style={styles.talkBtnText}>{talking ? 'Gửi' : 'Nói'}</Text>
+                </Pressable>
+              ) : (
+                aiSpeaking && (
+                  <Pressable style={styles.talkBtn} onPress={barge}>
+                    <Ionicons name="hand-left" size={20} color="#fff" />
+                    <Text style={styles.talkBtnText}>Ngắt lời</Text>
+                  </Pressable>
+                )
+              )}
+              <View style={styles.ctrlRow}>
+                <Pressable style={styles.ctrlBtn} onPress={() => setShowChat((v) => !v)}>
+                  <Ionicons
+                    name={showChat ? 'chatbubble-ellipses' : 'chatbubble-ellipses-outline'}
+                    size={17}
+                    color={showChat ? '#111' : '#999'}
+                  />
+                  <Text style={[styles.ctrlText, showChat && { color: '#111' }]}>Chat</Text>
+                </Pressable>
+                <Pressable style={styles.ctrlBtn} onPress={endCall}>
+                  <Ionicons name="call-outline" size={17} color="#999" />
+                  <Text style={styles.ctrlText}>Kết thúc</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
         </View>
       )}
 
@@ -407,6 +577,21 @@ export default function SessionScreen() {
                   ))}
                 </>
               )}
+
+              {(result.outline ?? []).length > 0 && (
+                <>
+                  <Text style={styles.section}>Dàn ý để luyện lại</Text>
+                  {result.outline!.map((o, i) => (
+                    <View key={i} style={styles.errorRow}>
+                      <Text style={styles.note}>
+                        {i + 1}. {o.step_vi}
+                      </Text>
+                      <Text style={styles.correct}>{o.en}</Text>
+                      {o.up ? <Text style={styles.up}>↳ {o.up}</Text> : null}
+                    </View>
+                  ))}
+                </>
+              )}
             </>
           ) : (
             <Text style={styles.comment}>
@@ -419,6 +604,17 @@ export default function SessionScreen() {
               <AudioPlayButton uri={audioUri} label="Nghe lại phiên" />
             </View>
           ) : null}
+
+          {(result?.outline?.length ?? 0) > 0 && sessionIdRef.current != null && (
+            <Pressable
+              style={styles.drillBtn}
+              onPress={() =>
+                router.push(`/session/${id}?drill=${sessionIdRef.current}`)
+              }
+            >
+              <Text style={styles.drillBtnText}>🔁 Luyện lại theo dàn ý</Text>
+            </Pressable>
+          )}
 
           <Pressable style={styles.doneBtn} onPress={() => router.back()}>
             <Text style={styles.doneBtnText}>Xong</Text>
@@ -460,6 +656,32 @@ const styles = StyleSheet.create({
   },
   orbError: { backgroundColor: '#ddd' },
   statusText: { marginTop: 48, fontSize: 15, color: '#888', fontFamily: F.regular },
+  talkBtn: {
+    marginTop: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 40,
+    paddingVertical: 17,
+    borderRadius: 34,
+    backgroundColor: '#111',
+  },
+  talkBtnOn: { backgroundColor: '#E53935' },
+  talkBtnText: { fontSize: 17, color: '#fff', fontFamily: F.semibold },
+  ctrlRow: { flexDirection: 'row', gap: 32, marginTop: 22 },
+  ctrlBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 8 },
+  ctrlText: { fontSize: 14, color: '#999', fontFamily: F.medium },
+  chatBox: {
+    marginTop: 24,
+    maxHeight: 220,
+    width: '100%',
+    backgroundColor: '#F6F6F3',
+    borderRadius: 14,
+    padding: 14,
+  },
+  chatLine: { fontSize: 14, color: '#333', fontFamily: F.regular, lineHeight: 20, marginBottom: 8 },
+  chatWhoUser: { fontFamily: F.semibold, color: '#111' },
+  chatWhoClient: { fontFamily: F.semibold, color: '#999' },
   endBtn: {
     position: 'absolute',
     bottom: 48,
@@ -493,7 +715,17 @@ const styles = StyleSheet.create({
   said: { fontSize: 15, color: '#999', textDecorationLine: 'line-through', fontFamily: F.regular },
   correct: { fontSize: 15, color: '#111', fontFamily: F.regular },
   note: { fontSize: 13, color: '#888', marginTop: 2, fontFamily: F.regular },
+  up: { fontSize: 13, color: '#0a7', marginTop: 3, fontStyle: 'italic', fontFamily: F.regular },
   replay: { marginTop: 24 },
+  drillBtn: {
+    marginTop: 28,
+    alignSelf: 'center',
+    backgroundColor: '#111',
+    paddingHorizontal: 28,
+    paddingVertical: 13,
+    borderRadius: 999,
+  },
+  drillBtnText: { color: '#fff', fontSize: 15, fontFamily: F.bold },
   doneBtn: {
     marginTop: 36,
     alignSelf: 'center',

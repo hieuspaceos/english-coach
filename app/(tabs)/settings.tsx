@@ -8,14 +8,19 @@ import {
   ScrollView,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from 'react-native';
 import { setApiKey } from '../../src/services/apiKey';
+import { queries } from '../../src/db/database';
 import { useCoachStore } from '../../src/state/store';
 import {
   getDailyGoal,
   setDailyGoal,
   getReminderHour,
   setReminderHour,
+  getTalkMode,
+  setTalkMode,
+  TalkMode,
 } from '../../src/services/gamification';
 import { syncPracticeReminder } from '../../src/services/reminders';
 import { FIELDS, getUserField, getUserName, getUserSubfield, setUserProfile } from '../../src/services/profile';
@@ -28,6 +33,7 @@ export default function SettingsScreen() {
   const [saved, setSaved] = useState(false);
   const [hour, setHour] = useState(getReminderHour());
   const [goal, setGoal] = useState(getDailyGoal());
+  const [mode, setMode] = useState<TalkMode>(getTalkMode());
   const [profileName, setProfileName] = useState(getUserName() ?? '');
   const [profileField, setProfileField] = useState(getUserField()?.id ?? null);
   const [profileSub, setProfileSub] = useState(getUserSubfield()?.id ?? null);
@@ -156,6 +162,36 @@ export default function SettingsScreen() {
         </Text>
 
         <View style={styles.row}>
+          <Text style={styles.rowLabel}>Kiểu hội thoại</Text>
+          <View style={styles.chips}>
+            {(
+              [
+                ['push', 'Bấm nút'],
+                ['auto', 'Tự do'],
+              ] as [TalkMode, string][]
+            ).map(([m, label]) => (
+              <Pressable
+                key={m}
+                style={[styles.chip, mode === m && styles.chipOn]}
+                onPress={() => {
+                  setMode(m);
+                  setTalkMode(m);
+                }}
+              >
+                <Text style={[styles.chipText, mode === m && styles.chipTextOn]}>
+                  {label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+        <Text style={styles.note}>
+          Bấm nút: Nói → Gửi từng lượt, chắc chắn không bị cắt. Tự do: nói liên
+          tục, app tự nhận khi bạn dừng — nghe tự nhiên hơn nhưng cần chống vọng
+          loa (đã bật AEC; nếu thấy AI bị ngắt thì quay lại Bấm nút).
+        </Text>
+
+        <View style={styles.row}>
           <Text style={styles.rowLabel}>Mục tiêu mỗi ngày</Text>
           <View style={styles.chips}>
             {[1, 2, 3].map((g) => (
@@ -175,6 +211,32 @@ export default function SettingsScreen() {
           Ngày chỉ được tính chuỗi khi hoàn thành đủ số phiên — giống XP goal
           của Duolingo. Tăng lên khi đã quen nhịp.
         </Text>
+
+        <View style={styles.row}>
+          <Text style={styles.rowLabel}>Dữ liệu</Text>
+          <Pressable
+            style={styles.resetBtn}
+            onPress={() =>
+              Alert.alert(
+                'Xóa lịch sử luyện tập?',
+                'Toàn bộ phiên, lỗi đã lưu, từ vựng, pitch và xu sẽ mất. API key, hồ sơ và cài đặt giữ nguyên.',
+                [
+                  { text: 'Hủy', style: 'cancel' },
+                  {
+                    text: 'Xóa hết',
+                    style: 'destructive',
+                    onPress: () => {
+                      queries.resetProgress();
+                      useCoachStore.getState().setCoins(0);
+                    },
+                  },
+                ],
+              )
+            }
+          >
+            <Text style={styles.resetText}>Xóa lịch sử luyện tập</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -247,4 +309,12 @@ const styles = StyleSheet.create({
   chipTextOn: { color: '#fff', fontFamily: F.semibold },
   fieldChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 24 },
   note: { marginTop: 12, fontSize: 13, color: '#aaa', lineHeight: 19, paddingHorizontal: 24, marginBottom: 24, fontFamily: F.regular },
+  resetBtn: {
+    borderWidth: 1,
+    borderColor: '#E53935',
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  resetText: { fontSize: 14, color: '#E53935', fontFamily: F.medium },
 });

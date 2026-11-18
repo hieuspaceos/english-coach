@@ -13,6 +13,15 @@ export function setDailyGoal(n: number): void {
   queries.setMeta('daily_goal', String(Math.min(3, Math.max(1, Math.round(n)))));
 }
 
+/** Conversation mode: 'push' = tap Nói/Gửi per turn, 'auto' = free-flow VAD. */
+export type TalkMode = 'push' | 'auto';
+export function getTalkMode(): TalkMode {
+  return queries.getMeta('talk_mode') === 'auto' ? 'auto' : 'push';
+}
+export function setTalkMode(m: TalkMode): void {
+  queries.setMeta('talk_mode', m);
+}
+
 /** Hour of day (0-23) the practice reminder fires. */
 export function getReminderHour(): number {
   const h = parseInt(queries.getMeta('reminder_hour') ?? '20', 10);

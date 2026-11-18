@@ -11,16 +11,32 @@ tình huống mới.
 ## Tính năng
 
 - **Call realtime 2 chiều**: mic → Gemini Live → giọng AI qua loa.
-  UI tối giản kiểu ChatGPT voice (orb + timer, không transcript trên màn).
+  UI tối giản kiểu ChatGPT voice (orb + timer).
+- **2 chế độ nói** (đổi trong Cài đặt):
+  - *Bấm nút* (mặc định): Nói → Gửi từng lượt bằng `activityStart`/
+    `activityEnd`, VAD tắt — AI nhận trọn vẹn lượt rồi mới trả lời.
+  - *Tự do*: nói liên tục, server VAD tự nhận hết câu
+    (`END_SENSITIVITY_LOW`), AEC phần cứng + gate mic khi AI nói →
+    không chồng tiếng; nút "Ngắt lời" để chen chủ động.
+- **Chat mode**: nút 💬 trên màn call bật/tắt transcript live
+  (mặc định tắt) — transcript vẫn lưu bất kể.
 - **Ghi phiên**: cả phiên được ghi ra file `.m4a` — nghe lại cùng
   transcript + lỗi ngay sau call và trong Lịch sử.
-- **Chấm bài**: transcript → JSON `{errors, vocab, comment}` → lưu DB.
-  Lỗi group theo pattern key để thấy lỗi lặp.
+- **Chấm bài**: transcript → JSON `{errors, vocab, outline, comment}`
+  → lưu DB. Lỗi group theo pattern key để thấy lỗi lặp.
+- **Dàn ý luyện lại**: mỗi phiên sinh 4-6 bước theo công thức chuẩn
+  của loại tình huống (self-intro = Present→Past→Proof→Future, pitch =
+  Problem→Solution→Proof→Ask...), kèm câu mẫu cá nhân hoá từ chính
+  nội dung đã nói + phiên bản nâng cấp (`up`). Nút "Luyện lại theo
+  dàn ý" mở call mới với outline nạp vào prompt của AI — AI dẫn câu
+  hỏi đúng thứ tự các ý.
 - **Từ vựng**: lưu từ mới mỗi phiên, ôn theo SRS.
 - **Tạo tình huống**: nhập ý tưởng tự do → AI sinh scenario phù hợp
   ngành nghề của bạn.
 - **Gamification**: streak, xu, hạng/badge, phạt ngày bỏ lỡ, nhắc giờ
   luyện hằng ngày (cài được giờ + số phiên/ngày).
+- **Reset dữ liệu**: nút "Xóa lịch sử luyện tập" trong Cài đặt — xóa
+  sessions/lỗi/từ vựng/pitch/xu, giữ API key + hồ sơ + cài đặt.
 - **Pitch hàng tuần**: ghi 1 bài pitch/tuần để tự đo tiến bộ.
 - **Onboarding**: tên + lĩnh vực + mảng nhỏ → AI vào vai đúng nghề.
 
@@ -28,15 +44,19 @@ tình huống mới.
 
 - **Realtime voice**: Gemini Live API qua WebSocket
   (`src/services/geminiLive.ts`) — mic PCM16 16kHz lên, PCM16 24kHz về.
-  `activityHandling: 'NO_INTERRUPTION'` + gate mic phía client trong lúc
-  AI nói (half-duplex) → tiếng ồn/echo không chặt câu của model.
+  `activityHandling: 'NO_INTERRUPTION'` + `proactivity.proactiveAudio:
+  false` + gate mic phía client trong lúc AI nói → tiếng ồn/echo không
+  chặt câu của model và model không tự nói tiếp khi im lặng.
 - **Mic + ghi file**: `@siteed/audio-studio` — vừa stream PCM vừa ghi
-  AAC nén ra file (`output.compressed`).
+  AAC nén ra file (`output.compressed`). Patch pnpm
+  (`patches/@siteed__audio-studio.patch`) đổi `AudioSource.MIC` →
+  `VOICE_COMMUNICATION` để Android bật AEC/noise-suppression phần cứng.
 - **Playback**: `react-native-audio-api` — `AudioContext` tạo đúng
   24kHz (`src/services/audioPlayback.ts`), jitter buffer ~0.35s.
-- **Chấm bài + sinh scenario**: REST `generateContent` với model
-  `gemini-3.1-flash-lite` (model `gemini-2.5-flash` đã retire cho key mới).
-- **Live model**: `gemini-2.5-flash-native-audio-preview-09-2025`.
+- **Chấm bài + sinh scenario**: REST `generateContent`, fallback theo
+  thứ tự `gemini-3.1-flash-lite` → `gemini-3.5-flash-lite` →
+  `gemini-2.5-flash-lite` (quota free tier tính theo từng model).
+- **Live model**: `gemini-2.5-flash-native-audio-preview-12-2025`.
 - **Data**: `expo-sqlite` — sessions (kèm `audio_uri`), errors, vocab,
   pitches, custom_scenarios, meta.
 - **API key**: nhập trong Cài đặt, lưu Expo SecureStore, không backend.
@@ -88,5 +108,10 @@ keystore + signing config theo bước trên.
   (`ctx.close()` có thể treo) và teardown bọc timeout — nút Kết thúc
   không bao giờ kẹt.
 - Session không transcript (connect rớt/remount) tự xóa khỏi history.
-- Đã test trên Pixel 6a thật: call 2 chiều, ghi + nghe lại, chấm bài,
-  tạo scenario, pitch, streak/xu, nhắc giờ.
+- Enum VAD đúng là `END_SENSITIVITY_LOW` (không phải
+  `END_OF_SPEECH_SENSITIVITY_LOW`) — sai enum bị server từ chối setup.
+- `router.dismissTo` tới cùng route chỉ pop chứ không mount màn mới —
+  dùng `router.push` khi cần instance mới (nút "Luyện lại theo dàn ý").
+- Đã test trên Pixel 6a thật: call 2 chiều (cả 2 chế độ), ghi + nghe
+  lại, chấm bài, dàn ý + luyện lại, tạo scenario, pitch, streak/xu,
+  nhắc giờ, reset dữ liệu.

@@ -15,7 +15,7 @@ const WS_URL =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
 
 /** Native-audio dialog model. Update if Google promotes a newer one. */
-const MODEL = 'models/gemini-2.5-flash-native-audio-preview-09-2025';
+const MODEL = 'models/gemini-2.5-flash-native-audio-preview-12-2025';
 
 /** UTF-8 bytes → string, for Hermes builds without TextDecoder. */
 function utf8BytesToString(bytes: Uint8Array): string {
@@ -68,7 +68,10 @@ export class GeminiLiveSession {
   private pendingAudio: string[] = [];
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(private handlers: LiveHandlers) {}
+  constructor(
+    private handlers: LiveHandlers,
+    private pushToTalk = false,
+  ) {}
 
   connect(apiKey: string, systemInstruction: string) {
     this.ws = new WebSocket(`${WS_URL}?key=${encodeURIComponent(apiKey)}`);
@@ -94,12 +97,39 @@ export class GeminiLiveSession {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Puck' } },
             },
           },
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          realtimeInputConfig: {
-            // Stray sound (room noise, speaker echo) must never chop the
-            // model mid-sentence — the learner gets full turns, always.
-            activityHandling: 'NO_INTERRUPTION',
+          systemInstruction: {
+            parts: [
+              {
+                text:
+                  systemInstruction +
+                  '\n\nTake exactly ONE turn at a time: one question or one short ' +
+                  'point, then STOP and wait in silence for the student to ' +
+                  'reply. Never stack questions, never fill silence by yourself, ' +
+                  'never start a new turn before they have spoken.',
+              },
+            ],
           },
+          // The 12-2025 model preview can answer proactively on silence —
+          // that would bury a learner mid-thought, so it must stay off.
+          proactivity: { proactiveAudio: false },
+          realtimeInputConfig: this.pushToTalk
+            ? {
+                // Push-to-talk: the app sends explicit activityStart/End,
+                // so server VAD must never guess — and never chop the model.
+                automaticActivityDetection: { disabled: true },
+                activityHandling: 'NO_INTERRUPTION',
+              }
+            : {
+                // Free-flow: server VAD detects turn ends. Low end-of-speech
+                // sensitivity waits out the pauses of a learner mid-sentence.
+                // Hardware AEC (VOICE_COMMUNICATION mic source) keeps speaker
+                // echo out, so only a real voice can trigger an interruption.
+                automaticActivityDetection: {
+                  disabled: false,
+                  endOfSpeechSensitivity: 'END_SENSITIVITY_LOW',
+                },
+                activityHandling: 'NO_INTERRUPTION',
+              },
           inputAudioTranscription: {},
           outputAudioTranscription: {},
         },
@@ -183,6 +213,16 @@ export class GeminiLiveSession {
     if (sc.turnComplete) {
       this.handlers.onTurnEnd();
     }
+  }
+
+  /** User pressed "Nói" — begin an explicit activity turn. */
+  activityStart() {
+    if (this.ready) this.send({ realtimeInput: { activityStart: {} } });
+  }
+
+  /** User pressed "Gửi" — turn complete, model should respond now. */
+  activityEnd() {
+    if (this.ready) this.send({ realtimeInput: { activityEnd: {} } });
   }
 
   /** Feed 16kHz PCM16 base64 chunks from the mic. Safe to call before ready. */

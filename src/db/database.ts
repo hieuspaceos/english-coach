@@ -147,6 +147,13 @@ export const queries = {
     );
   },
 
+  getSession(id: number) {
+    return db.getFirstSync<{ analysis_json: string | null }>(
+      'SELECT analysis_json FROM sessions WHERE id = ?',
+      id,
+    );
+  },
+
   updateSessionAudio(id: number, audioUri: string) {
     db.runSync('UPDATE sessions SET audio_uri = ? WHERE id = ?', audioUri, id);
   },
@@ -270,6 +277,15 @@ export const queries = {
       'SELECT scenario_id, COUNT(*) AS n FROM sessions GROUP BY scenario_id',
     );
     return Object.fromEntries(rows.map((r) => [r.scenario_id, r.n]));
+  },
+
+  /** Wipe all learning data — profile, settings, API key and custom
+   *  scenarios survive; sessions/errors/vocab/pitches/coins do not. */
+  resetProgress() {
+    db.execSync(
+      'DELETE FROM sessions; DELETE FROM errors; DELETE FROM vocab; DELETE FROM pitches;',
+    );
+    this.setMeta('coins', '0');
   },
 
   getMeta(key: string): string | null {

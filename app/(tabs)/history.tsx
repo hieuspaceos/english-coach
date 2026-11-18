@@ -63,6 +63,20 @@ function SessionItem({ item }: { item: SessionRow }) {
               <Text style={styles.correct}>{e.correct}</Text>
             </View>
           ))}
+          {(analysis?.outline ?? []).length > 0 && (
+            <>
+              <Text style={styles.detailSection}>Dàn ý để luyện lại</Text>
+              {analysis!.outline!.map((o, i) => (
+                <View key={i} style={styles.errorRow}>
+                  <Text style={styles.comment}>
+                    {i + 1}. {o.step_vi}
+                  </Text>
+                  <Text style={styles.correct}>{o.en}</Text>
+                  {o.up ? <Text style={styles.up}>↳ {o.up}</Text> : null}
+                </View>
+              ))}
+            </>
+          )}
           {item.audio_uri ? (
             <View style={styles.replay}>
               <AudioPlayButton uri={item.audio_uri} label="Nghe lại" />
@@ -192,9 +206,11 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e5e5e5',
   },
   comment: { fontSize: 14, color: '#333', lineHeight: 20, marginBottom: 8, fontFamily: F.regular },
+  detailSection: { fontSize: 12, fontWeight: '700', color: '#999', letterSpacing: 1, textTransform: 'uppercase', marginTop: 10, marginBottom: 6, fontFamily: F.bold },
   errorRow: { paddingVertical: 6, gap: 2 },
   said: { fontSize: 14, color: '#999', textDecorationLine: 'line-through', fontFamily: F.regular },
   correct: { fontSize: 14, color: '#111', fontFamily: F.regular },
+  up: { fontSize: 13, color: '#0a7', marginTop: 3, fontStyle: 'italic', fontFamily: F.regular },
   replay: { marginTop: 12 },
   transcriptToggle: { marginTop: 12, paddingVertical: 4 },
   transcriptToggleText: { fontSize: 13, color: '#666', fontFamily: F.regular },
