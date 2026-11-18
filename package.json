@@ -1,0 +1,47 @@
+{
+  "name": "english-coach",
+  "description": "Personal English speaking coach — realtime client-call practice with Gemini Live.",
+  "license": "UNLICENSED",
+  "private": true,
+  "version": "0.1.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@expo-google-fonts/be-vietnam-pro": "^0.4.1",
+    "@expo/vector-icons": "^15.1.1",
+    "@siteed/audio-studio": "^3.2.1",
+    "base-64": "^1.0.0",
+    "expo": "~58.0.26",
+    "expo-audio": "~58.0.12",
+    "expo-constants": "~58.0.16",
+    "expo-font": "^58.0.12",
+    "expo-haptics": "~58.0.8",
+    "expo-keep-awake": "^58.0.4",
+    "expo-linking": "~58.0.17",
+    "expo-notifications": "~58.1.9",
+    "expo-router": "~58.0.32",
+    "expo-secure-store": "~58.0.3",
+    "expo-sqlite": "~58.0.18",
+    "expo-status-bar": "~58.0.5",
+    "expo-system-ui": "~58.0.7",
+    "react": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-audio-api": "^1.0.0",
+    "react-native-reanimated": "4.7.1",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-screens": "~4.30.1",
+    "react-native-svg": "15.16.0",
+    "react-native-worklets": "0.13.0",
+    "zustand": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/base-64": "^1.0.2",
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  }
+}
